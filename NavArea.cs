@@ -11,7 +11,7 @@ using UnityEngine.Rendering;
 namespace Assets.Scripts.AI
 {
 
-    public struct Edge : IEquatable<Edge>
+    public class Edge : IEquatable<Edge>
     {
         public Edge(Vector3 start, Vector3 end)
         {
@@ -19,6 +19,8 @@ namespace Assets.Scripts.AI
             this.end = end;
         }
 
+
+        public List<Edge> connectedEdges = new List<Edge>();
         public Vector3 start;
         public Vector3 end;
         public Vector3 Direction => (end - start).normalized;
@@ -30,12 +32,32 @@ namespace Assets.Scripts.AI
             Gizmos.DrawLine(start, end);
         }
 
+
+        public bool IsConnected(Edge other)
+        {
+            return start == other.start || start == other.end || end == other.start || end == other.end;
+        }
+
+        public bool IsCollinear(Edge other)
+        {
+            float dot = Vector3.Dot(this.Direction, other.Direction);
+            return Mathf.Abs(dot - 1) < 0.001f; // Collinear if dot product is close to 1
+        }
         public bool Equals(Edge other)
         {
             return (start == other.start && end == other.end) || (start == other.end && end == other.start);
         }
     }
 
+    public struct Polygon
+    {
+        public List<Edge> edges;
+        public Polygon(List<Edge> edges)
+        {
+            this.edges = edges;
+        }
+
+    }
 
     public class NavArea : MonoBehaviour
     {
@@ -53,105 +75,8 @@ namespace Assets.Scripts.AI
         Dictionary<Vector3Int, Voxel> _voxelGrid = new Dictionary<Vector3Int, Voxel>();
         private bool[,] _walkable;
 
-
-        private void Awake()
-        {
-
-        }
-
-        private void Start()
-        {
-            FillNavArea();
-
-            int sizeX = (int)(_width / _agentRadius);
-            int sizeZ = (int)(_length / _agentRadius);
-            int sizeY = (int)(_height / _agentHeight);
-
-            float agentX = _agentRadius / 2.0f;
-            float agentZ = _agentRadius / 2.0f;
-
-
-            Vector3 topLeft = transform.position + new Vector3(-_width, 0, -_length) / 2.0f;
-            Vector3 previousEdge = Vector3.zero;
-
-            for (int x = 0; x < sizeX - 1; x++)
-            {
-                
-                for (int z = 0; z < sizeZ - 1; z++)
-                {
-                    // Build state (bit mask) from walkable corners
-                    int state = 0;
-                    if (_walkable[x, z]) state |= 1;        // bottom-left
-                    if (_walkable[x + 1, z]) state |= 2;    // bottom-right
-                    if (_walkable[x + 1, z + 1]) state |= 4; // top-right
-                    if (_walkable[x, z + 1]) state |= 8;    // top-left
-
-                    // pick edges from lookup table
-                    var edges = MarchingSquaresTable[state];
-                    for (int i = 0; i < edges.Length; i += 2)
-                    {
-                        Vector2 p1 = GetEdgeMidpoint(edges[i], x, z);
-                        Vector2 p2 = GetEdgeMidpoint(edges[i + 1], x, z);
-
-                        Vector3 wp1 = topLeft + new Vector3(p1.x, 0.0f, p1.y);
-                        Vector3 wp2 = topLeft + new Vector3(p2.x, 0.0f, p2.y);
-
-                        wp1 = AdjustPointToSurface(wp1);
-                        wp2 = AdjustPointToSurface(wp2);
-
-
-                        //Fix their heights
-                        wp1.y += 1f;
-                        wp2.y += 1f;
-
-
-                        //Vector3 currentEdge = wp2 - wp1;
-                        //if (!previousEdge.Equals(Vector3.zero))
-                        //{
-
-                        //    // Check if the current edge is collinear with the previous edge
-                        //    float dot = Vector3.Dot(previousEdge.normalized, currentEdge.normalized);
-
-                        //    if (Mathf.Abs(dot - 1) < 0.0001f) // Collinear if dot product is close to 1
-                        //    {
-                        //        continue;
-                        //    }
-                        //}
-
-                        //previousEdge = currentEdge;
-
-
-                        Edge edge = new Edge(wp1, wp2);
-                        _edges.Add(edge);
-                        
-
-                    }
-                }
-
-            }
-
-
-            
-
-
-        }
-
-
-
-        Vector3 AdjustPointToSurface(Vector3 flatPoint)
-        {
-            // Cast a ray down from above the contour point
-            Ray ray = new Ray(flatPoint + Vector3.up * _agentHeight, Vector3.down);
-            if (Physics.SphereCast(ray, _agentRadius, out RaycastHit hit, 50f))
-            {
-                return hit.point; // Snap contour point to the surface
-            }
-
-            return flatPoint; // Fallback (no hit found)
-        }
-
-        static readonly int[][] MarchingSquaresTable = new int[][]
-        {
+        static readonly int[][] s_MarchingSquaresTable = new int[][]
+       {
             new int[] {},           // 0000
             new int[] {0,1},        // 0001
             new int[] {1,2},        // 0010
@@ -168,7 +93,142 @@ namespace Assets.Scripts.AI
             new int[] {1,2},        // 1101
             new int[] {0,1},        // 1110
             new int[] {}            // 1111
-        };
+       };
+
+        private void Awake()
+        {
+
+        }
+
+        private void Start()
+        {
+            FillVoxels();
+            BuildContour();
+            MergeEdges();
+            MarkConnectedEdges();
+            BuildPolygons();
+
+        }
+
+      
+        private void MarkConnectedEdges()
+        {
+            for(int i = 0; i < _edges.Count; i++)
+            {
+                Edge edge = _edges[i];
+                for(int j = 0; j < _edges.Count; j++)
+                {
+
+                    if (i == j)
+                        continue;
+
+                    if (edge.IsConnected(_edges[j]))
+                    {
+                        edge.connectedEdges.Add(_edges[j]);
+                    }
+                }
+            }
+            
+        }
+
+        private void BuildPolygons()
+        {
+
+        }
+
+        private void BuildContour()
+        {
+            int sizeX = (int)(_width / _agentRadius);
+            int sizeZ = (int)(_length / _agentRadius);
+            int sizeY = (int)(_height / _agentHeight);
+
+            float agentX = _agentRadius / 2.0f;
+            float agentZ = _agentRadius / 2.0f;
+
+
+            Vector3 topLeft = transform.position + new Vector3(-_width, 0, -_length) / 2.0f;
+
+            for (int x = 0; x < sizeX - 1; x++)
+            {
+
+                for (int z = 0; z < sizeZ - 1; z++)
+                {
+                    // Build state (bit mask) from walkable corners
+                    int state = 0;
+                    if (_walkable[x, z]) state |= 1;        // bottom-left
+                    if (_walkable[x + 1, z]) state |= 2;    // bottom-right
+                    if (_walkable[x + 1, z + 1]) state |= 4; // top-right
+                    if (_walkable[x, z + 1]) state |= 8;    // top-left
+
+                    // pick edges from lookup table
+                    var edges = s_MarchingSquaresTable[state];
+                    for (int i = 0; i < edges.Length; i += 2)
+                    {
+                        Vector2 p1 = GetEdgeMidpoint(edges[i], x, z);
+                        Vector2 p2 = GetEdgeMidpoint(edges[i + 1], x, z);
+
+                        Vector3 wp1 = topLeft + new Vector3(p1.x, 0.0f, p1.y);
+                        Vector3 wp2 = topLeft + new Vector3(p2.x, 0.0f, p2.y);
+
+                        wp1 = AdjustPointToSurface(wp1);
+                        wp2 = AdjustPointToSurface(wp2);
+
+                        //Fix their heights
+                        wp1.y += 1f;
+                        wp2.y += 1f;
+
+                        Edge edge = new Edge(wp1, wp2);
+                        _edges.Add(edge);
+                    }
+                }
+
+            }
+        }
+
+   
+
+        private void MergeEdges()
+        {
+            //Merge edges
+            Debug.Log("There are " + _edges.Count + " edges before simplification.");
+            Edge previous;
+            Edge current = _edges[0];
+
+            List<Edge> simplifiedEdges = new List<Edge>();
+
+            for (int i = 1; i < _edges.Count; i++)
+            {
+                previous = current;
+                current = _edges[i];
+                if (previous.IsCollinear(current) && Vector3.Distance(previous.end, current.start) < 0.1f)
+                {
+                    // Merge edges
+                    current = new Edge(previous.start, current.end);
+                }
+                else
+                {
+                    simplifiedEdges.Add(previous);
+                    _edges[i] = previous;
+                }
+            }
+            simplifiedEdges.Add(current); // Add the last edge
+            _edges = simplifiedEdges;
+
+            Debug.Log("There are " + _edges.Count + " edges after simplification.");
+        }
+
+        Vector3 AdjustPointToSurface(Vector3 flatPoint)
+        {
+            // Cast a ray down from above the contour point
+            Ray ray = new Ray(flatPoint + Vector3.up * _agentHeight, Vector3.down);
+            if (Physics.SphereCast(ray, _agentRadius, out RaycastHit hit, 50f))
+            {
+               
+                return hit.point; // Snap contour point to the surface
+            }
+
+            return flatPoint; // Fallback (no hit found)
+        } 
 
         private Vector2 GetEdgeMidpoint(int edgeIndex, int x, int z)
         {
@@ -195,7 +255,7 @@ namespace Assets.Scripts.AI
         }
 
 
-        private void FillNavArea()
+        private void FillVoxels()
         {
             int numOfCubesX = (int)(_width / _agentRadius);
             int numOfCubesY = (int)(_height / _agentHeight);
