@@ -52,6 +52,19 @@ namespace Assets.Scripts.AI
     public struct Polygon
     {
         public List<Edge> edges;
+        public List<Vector3> Vertices
+        {
+            get
+            {
+                HashSet<Vector3> verts = new HashSet<Vector3>();
+                foreach (var edge in edges)
+                {
+                    verts.Add(edge.start);
+                    verts.Add(edge.end);
+                }
+                return verts.ToList();
+            }
+        }
         public Polygon(List<Edge> edges)
         {
             this.edges = edges;
@@ -74,6 +87,8 @@ namespace Assets.Scripts.AI
         private List<Edge> _edges = new List<Edge>();
         Dictionary<Vector3Int, Voxel> _voxelGrid = new Dictionary<Vector3Int, Voxel>();
         private bool[,] _walkable;
+        private List<Polygon> _polygons = new List<Polygon>();
+
 
         static readonly int[][] s_MarchingSquaresTable = new int[][]
        {
@@ -133,6 +148,39 @@ namespace Assets.Scripts.AI
 
         private void BuildPolygons()
         {
+            //just move in one direction until you get back to the start
+            HashSet<Edge> visitedEdges = new HashSet<Edge>();
+            foreach(var edge in _edges)
+            {
+                if (visitedEdges.Contains(edge))
+                    continue;
+                List<Edge> polygonEdges = new List<Edge>();
+                Edge currentEdge = edge;
+                polygonEdges.Add(currentEdge);
+                visitedEdges.Add(currentEdge);
+                while (true)
+                {
+                    //Find the next connected edge that hasn't been visited
+                    Edge nextEdge = null;
+                    foreach(var connected in currentEdge.connectedEdges)
+                    {
+                        if (!visitedEdges.Contains(connected))
+                        {
+                            nextEdge = connected;
+                            break;
+                        }
+                    }
+                    if (nextEdge == null || nextEdge.Equals(edge))
+                        break; // No unvisited connected edges or looped back to start
+                    polygonEdges.Add(nextEdge);
+                    visitedEdges.Add(nextEdge);
+                    currentEdge = nextEdge;
+                }
+                if (polygonEdges.Count > 2) // A valid polygon needs at least 3 edges
+                {
+                    _polygons.Add(new Polygon(polygonEdges));
+                }
+            }
 
         }
 
